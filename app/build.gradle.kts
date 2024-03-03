@@ -48,13 +48,10 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
+    implementation(libs.common)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 
-    implementation("org.tensorflow:tensorflow-lite:2.9.0")
-    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.0")
-    // Import the GPU delegate plugin Library for GPU inference
-    implementation("org.tensorflow:tensorflow-lite-gpu-delegate-plugin:0.4.0")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.9.0")
+    implementation("com.google.mlkit:object-detection-custom:17.0.1")
 }

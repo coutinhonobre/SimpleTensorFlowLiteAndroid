@@ -5,165 +5,136 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
-import android.widget.ImageView
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.example.mlkitsimpleexemple.databinding.ActivityMainBinding
-import org.tensorflow.lite.Interpreter
-import java.io.FileInputStream
+import com.google.mlkit.common.model.LocalModel
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.objects.DetectedObject
+import com.google.mlkit.vision.objects.ObjectDetection
+import com.google.mlkit.vision.objects.custom.CustomObjectDetectorOptions
+import java.io.BufferedReader
 import java.io.IOException
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.channels.FileChannel
+import java.io.InputStreamReader
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var bindig: ActivityMainBinding
+    private val binding: ActivityMainBinding by lazy {
+        ActivityMainBinding.inflate(layoutInflater)
+    }
 
-    private lateinit var interpreter: Interpreter
+    private lateinit var labels: List<String>
 
-    // Dimensões da entrada do modelo
-    private val inputImageWidth = 150
-    private val inputImageHeight = 150
-    private val inputImageChannels = 3
-    private val numClasses = 4
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        bindig = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(bindig.root)
+        setContentView(binding.root)
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
 
-        // Inicialize o Interpreter do TensorFlow Lite
-        val modelFileDescriptor = assets.openFd("fruits_model.tflite")
-        val inputStream = FileInputStream(modelFileDescriptor.fileDescriptor)
-        val fileChannel = inputStream.channel
-        val startOffset = modelFileDescriptor.startOffset
-        val declaredLength = modelFileDescriptor.declaredLength
-        val modelBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
-        interpreter = Interpreter(modelBuffer)
+        val localModel = LocalModel.Builder()
+            .setAssetFilePath("fruits_model.tflite")
+            // or .setAbsoluteFilePath(absolute file path to model file)
+            // or .setUri(URI to model file)
+            .build()
 
-        // Chame a função para carregar uma imagem do diretório "assets"
-        pickImageFromAssets("kiwitwo.jpg")
-    }
+        // Live detection and tracking
+        val customObjectDetectorOptions =
+            CustomObjectDetectorOptions.Builder(localModel)
+                .setDetectorMode(CustomObjectDetectorOptions.SINGLE_IMAGE_MODE)
+                .enableClassification()
+                .setClassificationConfidenceThreshold(0.5f)
+                .setMaxPerObjectLabelCount(3)
+                .build()
 
-    private fun pickImageFromAssets(imageFileName: String) {
+
+        val objectDetector =
+            ObjectDetection.getClient(customObjectDetectorOptions)
+
+        // Carregar as labels do arquivo de texto
         try {
-            // Carregue a imagem do diretório "assets"
-            val inputStream = assets.open(imageFileName)
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream.close()
-
-            // Redimensione a imagem para o formato de entrada do modelo
-            val resizedBitmap = Bitmap.createScaledBitmap(bitmap, inputImageWidth, inputImageHeight, true)
-
-            // Mostre a imagem redimensionada no ImageView
-            //bindig.imageView.setImageBitmap(resizedBitmap)
-
-            // Faça a inferência com o modelo TensorFlow Lite
-            val result = performInference(resizedBitmap)
-            // Desenhe as caixas delimitadoras na imagem
-            val outputBitmap = drawBoundingBoxes(resizedBitmap, result)
-
-            // Mostre a imagem com caixas delimitadoras no ImageView
-            bindig.imageView.setImageBitmap(outputBitmap)
+            labels = loadLabelsFromAsset("labels.txt")
         } catch (e: IOException) {
             e.printStackTrace()
         }
-    }
 
-    private fun performInference(bitmap: Bitmap): FloatArray {
-        // Pré-processamento da imagem
-        val inputBuffer = ByteBuffer.allocateDirect(4 * inputImageWidth * inputImageHeight * inputImageChannels)
-        inputBuffer.order(ByteOrder.nativeOrder())
+        val imageBitmap = BitmapFactory.decodeStream(assets.open("apple.jpg"))
+        val image = InputImage.fromBitmap(imageBitmap, 0)
 
-        val pixels = IntArray(inputImageWidth * inputImageHeight)
-        bitmap.getPixels(pixels, 0, inputImageWidth, 0, 0, inputImageWidth, inputImageHeight)
-
-        for (pixelValue in pixels) {
-            inputBuffer.putFloat((pixelValue shr 16 and 0xFF) / 255.0f)
-            inputBuffer.putFloat((pixelValue shr 8 and 0xFF) / 255.0f)
-            inputBuffer.putFloat((pixelValue and 0xFF) / 255.0f)
-        }
-
-        // Faça a inferência
-        val outputBuffer = ByteBuffer.allocateDirect(4 * numClasses)
-        outputBuffer.order(ByteOrder.nativeOrder())
-
-        interpreter.run(inputBuffer, outputBuffer)
-
-        // Processamento do resultado
-        val result = FloatArray(numClasses)
-        outputBuffer.rewind()
-        outputBuffer.asFloatBuffer().get(result)
-
-        // Exemplo: imprimir coordenadas da caixa delimitadora
-        val xmin = result[0]
-        val ymin = result[1]
-        val xmax = result[2]
-        val ymax = result[3]
-
-        Log.d("Object Detection", "Coordenadas da Caixa Delimitadora: ($xmin, $ymin, $xmax, $ymax)")
-
-        // Encontrar a classe com a maior probabilidade
-        val maxProbIndex = result.indices.maxByOrNull { result[it] } ?: -1
-
-        // Carregar os rótulos
-        val labels = loadLabels("labels.txt") // Substitua "labels.txt" pelo seu arquivo de rótulos
-
-        // Identificar o objeto detectado
-        val detectedObject = labels.getOrNull(maxProbIndex) ?: "Objeto Desconhecido"
-
-        Log.d("Object Detection", "Objeto Detectado: $detectedObject")
-
-
-        return result
-    }
-
-    private fun loadLabels(fileName: String): List<String> {
-        try {
-            val labelsInputStream = assets.open(fileName)
-            val labels = mutableListOf<String>()
-            labelsInputStream.bufferedReader().useLines { lines ->
-                lines.forEach { labels.add(it) }
+        objectDetector.process(image)
+            .addOnSuccessListener { results ->
+                Log.d("IMAGEM", "onSuccess")
+                drawBoundingBox(imageBitmap, results)
+                for (detectedObjects in results) {
+                    val boundingBox = detectedObjects.boundingBox
+                    Log.d("IMAGEM", "boundingBox: $boundingBox")
+                }
             }
-            labelsInputStream.close()
-            return labels
-        } catch (e: IOException) {
-            e.printStackTrace()
-        }
-        return emptyList()
+            .addOnFailureListener { e ->
+                Log.e("IMAGEM", "Error processing image", e)
+            }
+            .addOnCompleteListener {
+                Log.d("IMAGEM", "onComplete")
+                objectDetector.close()
+            }
+
+
     }
 
-    // funcao ainda nao finalizada
-    private fun drawBoundingBoxes(bitmap: Bitmap, result: FloatArray): Bitmap {
-        val outputBitmap = bitmap.copy(bitmap.config, true)
-        val canvas = Canvas(outputBitmap)
+    private fun drawBoundingBox(imageBitmap: Bitmap, detectedObjects: MutableList<DetectedObject>) {
         val paint = Paint()
+        paint.color = Color.BLUE
         paint.style = Paint.Style.STROKE
-        paint.color = Color.RED
-        paint.strokeWidth = 2.0f
+        paint.strokeWidth = 5f
 
-        // Ajuste para as coordenadas da caixa delimitadora
-        val xmin = (result[0] * inputImageWidth).coerceAtLeast(0.0f).coerceAtMost(inputImageWidth.toFloat())
-        val ymin = (result[1] * inputImageHeight).coerceAtLeast(0.0f).coerceAtMost(inputImageHeight.toFloat())
-        val xmax = (result[2] * inputImageWidth).coerceAtLeast(0.0f).coerceAtMost(inputImageWidth.toFloat())
-        val ymax = (result[3] * inputImageHeight).coerceAtLeast(0.0f).coerceAtMost(inputImageHeight.toFloat())
+        val mutableBitmap = imageBitmap.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(mutableBitmap)
 
+        for (detectedObject in detectedObjects) {
+            val boundingBox = detectedObject.boundingBox
+            val left = boundingBox.left
+            val top = boundingBox.top
+            val right = boundingBox.right
+            val bottom = boundingBox.bottom
 
-        // Desenhe a caixa delimitadora
-        canvas.drawRect(RectF(xmin, ymin, xmax, ymax), paint)
+            val labelIndex = detectedObject.labels[0].index
 
-        return outputBitmap
+            // Adiciona a label ao retângulo desenhado
+            val labelText = detectedObject.labels[0].text
+            canvas.drawRect(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat(), paint)
+            canvas.drawText(labelText, left.toFloat(), top.toFloat() - 10, paint)
+        }
+
+        runOnUiThread {
+            binding.imageView.setImageBitmap(mutableBitmap)
+        }
     }
+
+
+    @Throws(IOException::class)
+    private fun loadLabelsFromAsset(fileName: String): List<String> {
+        val labels = mutableListOf<String>()
+        val inputStream = assets.open(fileName)
+        val reader = BufferedReader(InputStreamReader(inputStream))
+        var line: String?
+
+        try {
+            while (reader.readLine().also { line = it } != null) {
+                labels.add(line.orEmpty())
+            }
+        } finally {
+            reader.close()
+        }
+
+        return labels
+    }
+
 }
